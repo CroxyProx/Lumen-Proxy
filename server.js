@@ -1,6 +1,7 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cors = require('cors');
+const morgan = require('morgan');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -8,16 +9,36 @@ const PORT = process.env.PORT || 3000;
 // Enable CORS
 app.use(cors());
 
-// Universal Proxy Middleware
-app.use('/proxy', createProxyMiddleware({
-    target: '', // Will be dynamically set
-    changeOrigin: true,
-    router: req => {
-        if (!req.query.url) return 'http://localhost';  
+// Enable logging
+app.use(morgan('dev'));
+
+// Proxy Middleware
+app.use('/proxy', (req, res, next) => {
+    try {
+        if (!req.query.url) {
+            return res.status(400).json({ error: 'Missing "url" query parameter' });
+        }
+        
         const targetUrl = new URL(req.query.url);
-        return `${targetUrl.protocol}//${targetUrl.host}`;
+        req.targetUrl = targetUrl; // Store it for use in the proxy middleware
+        next();
+    } catch (error) {
+        return res.status(400).json({ error: 'Invalid URL' });
+    }
+});
+
+app.use('/proxy', createProxyMiddleware({
+    target: 'http://localhost', // Default target (will be overridden dynamically)
+    changeOrigin: true,
+    router: (req) => `${req.targetUrl.protocol}//${req.targetUrl.host}`,
+    pathRewrite: (path, req) => req.targetUrl.pathname + req.targetUrl.search,
+    onError: (err, req, res) => {
+        console.error('Proxy Error:', err);
+        res.status(500).json({ error: 'Proxy request failed' });
     },
-    pathRewrite: (path, req) => new URL(req.query.url).pathname + new URL(req.query.url).search
+    onProxyReq: (proxyReq, req) => {
+        console.log(`Proxying request to: ${req.targetUrl.href}`);
+    }
 }));
 
 // Home Page
